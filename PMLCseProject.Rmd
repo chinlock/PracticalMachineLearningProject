@@ -1,0 +1,146 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Oh Chin Lock"
+date: "22 May, 2015"
+output: html_document
+---
+
+## Introduction
+
+This is the Course Project for the "Practical Machine Learning" Course on Coursera.
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases. 
+
+_Data Sources_
+
+- Training Data:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+- Test Data:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Data Preparation
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+set.seed(5000)
+```
+
+First, we download the data files from the website.
+``` {r}
+trainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if (!file.exists("pml-training.csv")) 
+    download.file(trainUrl, destfile = "pml-training.csv", method="curl")
+if (!file.exists("pml-testing.csv"))
+    download.file(testUrl, destfile = "pml-testing.csv", method="curl")
+training_raw <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+testing_raw <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+The number of variables are rather large, and not all is needed to be used as predictors.
+```{r}
+dim(training_raw); dim(testing_raw)
+```
+
+## Cleaning the Data
+
+We check the structure of the variables and noticed that there are some variables that have many empty values.
+```{r}
+sum(colSums(is.na(training_raw)) >100)
+```
+
+As the prediction on "classe" is based only on the accelerometers values of belt, forearm, arm and dumbell, the non-accelerometer measures, and variables with high (90% or more) NAs are removed.  
+```{r}
+NAindex <- apply(training_raw,2,function(x) {sum(is.na(x))}) 
+NAindex <- NAindex / nrow(training_raw)  # calculate percentage of NAs in the variable
+training <- training_raw[,which(NAindex <= 0.1)]  # exclude variables with >90% NAs
+testing <- testing_raw[,which(NAindex <= 0.1)]
+```
+
+The number of variables are reduced to:
+```{r}
+dim(training); dim(testing);
+```
+
+We then preprocess the numeric variables to center and scale these variables, and use "knnImpute" to impute missing values if any.
+```{r}
+nVars <- which(lapply(training, class) %in% "numeric")
+preObj <-preProcess(training[,nVars],method=c('knnImpute', 'center', 'scale'))
+training_clean <- predict(preObj, training[,nVars])
+training_clean$classe <- training$classe
+testing_clean <-predict(preObj,testing[,nVars])
+#testing_clean$classe <- ""
+```
+
+The number of variables is further reduced to:
+```{r}
+dim(training_clean); dim(testing_clean)
+```
+
+## Data Slicing
+
+We partition the cleaned training data set further into a training (75%) and validation data set (25%) for cross validation later on.
+```{r}
+inTrain <- createDataPartition(y=training_clean$classe, p=0.75, list=FALSE)
+training_data <- training_clean[inTrain, ]
+validation_data <- training_clean[-inTrain, ]
+dim(training_data); dim(validation_data)
+```
+
+## Data Modelling
+
+We will used the __Random Forests (RF)__ algorithm to train the model to recognise activity types (classe) as the RF algorithm can automatically select important variables.
+```{r}
+folds_rf <- trainControl(method="cv", 5)
+modelFit_rf <- train(classe ~ ., data=training_data, method="rf", trControl=folds_rf, ntree=250)
+modelFit_rf
+```
+
+The RF algorithm is accurate but can run the risk of overfitting.  The estimated __in-sample accuracy__ is 99.17%. 
+
+We test out the accuracy on the validation data set.
+```{r}
+predictRf <- predict(modelFit_rf, validation_data)
+confusionMatrix(validation_data$classe, predictRf)
+accuracy <- postResample(predictRf, validation_data$classe)
+accuracy
+err <- 1 - as.numeric(confusionMatrix(validation_data$classe, predictRf)$overall[1])
+err
+```
+
+The estimated __out-of-sample accuracy__ is 99.45% and error is 0.55%.
+
+## Using the Model on the Test Set
+
+We now apply the RF model on the __test data set__ to predict the classe variable.  The results are shown below.
+
+``` {r}
+result <- predict(modelFit_rf, testing_clean)
+result
+```
+
+## Annexes
+
+The tree plot:
+
+```{r}
+treeplot <- rpart(classe ~ ., data=training_data, method="class")
+prp(treeplot)
+```
+
+##### Citations
+1. Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.  Read more: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3arFYtU7i
